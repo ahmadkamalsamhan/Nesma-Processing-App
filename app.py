@@ -1,5 +1,4 @@
 import streamlit as st
-import json
 from io import BytesIO
 import pytesseract
 from PIL import Image
@@ -11,13 +10,16 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import requests
 
-st.set_page_config(page_title="PDF OCR + AI Search", layout="wide")
+# --------------------------
+# Page Config
+# --------------------------
+st.set_page_config(page_title="Nesma PDF OCR + AI", layout="wide")
 st.title("📄 Nesma PDF OCR + AI Semantic Search System")
 
 # --------------------------
 # Service Account Setup via Streamlit Secrets
 # --------------------------
-service_account_info = json.loads(st.secrets["SERVICE_ACCOUNT_JSON"])
+service_account_info = dict(st.secrets["SERVICE_ACCOUNT_JSON"])
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 credentials = service_account.Credentials.from_service_account_info(
