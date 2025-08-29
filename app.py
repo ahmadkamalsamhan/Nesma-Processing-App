@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import pytesseract
 from pdf2image import convert_from_bytes
-from PIL import Image
 import io
 import requests
 import re
@@ -30,14 +29,23 @@ HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
 HF_HEADERS = {"Authorization": f"Bearer {HF_API_TOKEN}"}
 
 # =========================
+# Settings
+# =========================
+MAX_PAGES_PER_PDF = 10
+PDF_DPI = 150
+MAX_CHARS_PER_FILE = 1000
+
+# =========================
 # OCR Extraction
 # =========================
 def extract_text_from_pdf_bytes(pdf_bytes, filename, page_range=None):
-    images = convert_from_bytes(pdf_bytes, dpi=300)
+    images = convert_from_bytes(pdf_bytes, dpi=PDF_DPI)
+    if page_range:
+        images = [img for i, img in enumerate(images, start=1) if i in page_range]
+    else:
+        images = images[:MAX_PAGES_PER_PDF]  # limit pages
     text = ""
-    for i, img in enumerate(images, start=1):
-        if page_range and i not in page_range:
-            continue
+    for img in images:
         text += pytesseract.image_to_string(img, lang="eng") + "\n"
     return text
 
@@ -56,19 +64,6 @@ def query_hf(prompt, context):
         return f"[Error from Hugging Face] {str(e)}"
 
 # =========================
-# Google Drive Downloader
-# =========================
-def download_drive_file(file_id):
-    request = drive_service.files().get_media(fileId=file_id)
-    file_data = io.BytesIO()
-    downloader = MediaIoBaseDownload(file_data, request)
-    done = False
-    while not done:
-        status, done = downloader.next_chunk()
-    file_data.seek(0)
-    return file_data.getvalue()
-
-# =========================
 # Extract File or Folder ID
 # =========================
 def extract_drive_id(url):
@@ -78,14 +73,12 @@ def extract_drive_id(url):
     - file links: /d/FILE_ID or open?id=FILE_ID
     - folder links: /folders/FOLDER_ID
     """
-    # Check file /d/ or open?id=
     match = re.search(r"/d/([a-zA-Z0-9_-]+)", url)
     if match:
         return match.group(1), "file"
     match = re.search(r"id=([a-zA-Z0-9_-]+)", url)
     if match:
         return match.group(1), "file"
-    # Check folder /folders/
     match = re.search(r"/folders/([a-zA-Z0-9_-]+)", url)
     if match:
         return match.group(1), "folder"
@@ -99,8 +92,20 @@ def list_pdfs_in_folder(folder_id):
         q=f"'{folder_id}' in parents and mimeType='application/pdf'",
         fields="files(id, name)"
     ).execute()
-    files = results.get('files', [])
-    return files
+    return results.get('files', [])
+
+# =========================
+# Download PDF Bytes in Memory
+# =========================
+def download_pdf_bytes(file_id):
+    request = drive_service.files().get_media(fileId=file_id)
+    file_data = io.BytesIO()
+    downloader = MediaIoBaseDownload(file_data, request)
+    done = False
+    while not done:
+        status, done = downloader.next_chunk()
+    file_data.seek(0)
+    return file_data.getvalue()
 
 # =========================
 # Streamlit UI
@@ -118,9 +123,9 @@ if choice == "📂 Upload PDFs":
         "Upload PDF files", type="pdf", accept_multiple_files=True
     )
     if uploaded_files:
-        for pdf in uploaded_files:
+        for i, pdf in enumerate(uploaded_files, start=1):
             pdf_bytes = pdf.read()
-            with st.spinner(f"Processing {pdf.name}..."):
+            with st.spinner(f"Processing {pdf.name} ({i}/{len(uploaded_files)})..."):
                 text = extract_text_from_pdf_bytes(pdf_bytes, pdf.name)
             all_texts.append((pdf.name, text))
 
@@ -136,10 +141,10 @@ elif choice == "🔗 Google Drive Link":
         else:
             if link_type == "file":
                 try:
-                    with st.spinner("Downloading file from Google Drive..."):
-                        pdf_bytes = download_drive_file(drive_id)
-                    text = extract_text_from_pdf_bytes(pdf_bytes, "drive_file.pdf")
-                    all_texts.append(("drive_file.pdf", text))
+                    with st.spinner("Processing file from Google Drive..."):
+                        pdf_bytes = download_pdf_bytes(drive_id)
+                        text = extract_text_from_pdf_bytes(pdf_bytes, "drive_file.pdf")
+                        all_texts.append(("drive_file.pdf", text))
                 except Exception as e:
                     st.error(f"Google Drive Error: {str(e)}")
             elif link_type == "folder":
@@ -148,9 +153,9 @@ elif choice == "🔗 Google Drive Link":
                         files = list_pdfs_in_folder(drive_id)
                     if not files:
                         st.warning("No PDF files found in this folder.")
-                    for f in files:
-                        with st.spinner(f"Downloading {f['name']}..."):
-                            pdf_bytes = download_drive_file(f['id'])
+                    for idx, f in enumerate(files, start=1):
+                        with st.spinner(f"Processing {f['name']} ({idx}/{len(files)})..."):
+                            pdf_bytes = download_pdf_bytes(f['id'])
                             text = extract_text_from_pdf_bytes(pdf_bytes, f['name'])
                             all_texts.append((f['name'], text))
                 except Exception as e:
@@ -166,7 +171,8 @@ if all_texts:
 
     question = st.text_input("💬 Ask AI about these PDFs:")
     if st.button("Ask AI") and question:
-        context = "\n\n".join([t[1] for t in all_texts])[:4000]  # keep context short
+        # Limit context per file to save tokens and memory
+        context = "\n\n".join([t[1][:MAX_CHARS_PER_FILE] for t in all_texts])
         with st.spinner("Querying AI..."):
             answer = query_hf(question, context)
         st.write("### 🤖 AI Answer:")
