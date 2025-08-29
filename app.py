@@ -22,7 +22,7 @@ credentials = service_account.Credentials.from_service_account_info(
 drive_service = build("drive", "v3", credentials=credentials)
 
 # Hugging Face API
-HF_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
+HF_MODEL = "bigcode/starcoder"  # public model to avoid 403
 HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
 HF_HEADERS = {"Authorization": f"Bearer {HF_API_TOKEN}"}
 
@@ -45,30 +45,38 @@ def extract_drive_id(url):
     return None, None
 
 def list_pdfs_in_folder(folder_id):
-    results = drive_service.files().list(
-        q=f"'{folder_id}' in parents and mimeType='application/pdf'",
-        fields="files(id, name)"
-    ).execute()
-    return results.get('files', [])
+    try:
+        results = drive_service.files().list(
+            q=f"'{folder_id}' in parents and mimeType='application/pdf'",
+            fields="files(id, name)"
+        ).execute()
+        return results.get('files', [])
+    except Exception as e:
+        st.error(f"Error accessing folder: {str(e)}")
+        return []
 
 def download_pdf_bytes(file_id):
-    request = drive_service.files().get_media(fileId=file_id)
-    file_data = io.BytesIO()
-    downloader = MediaIoBaseDownload(file_data, request)
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-    file_data.seek(0)
-    return file_data.getvalue()
+    try:
+        request = drive_service.files().get_media(fileId=file_id)
+        file_data = io.BytesIO()
+        downloader = MediaIoBaseDownload(file_data, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        file_data.seek(0)
+        return file_data.getvalue()
+    except Exception as e:
+        st.error(f"Error downloading PDF: {str(e)}")
+        return None
 
 def parse_page_selection(page_input, total_pages):
     pages = set()
     parts = page_input.split(',')
     for part in parts:
         if '-' in part:
-            start, end = part.split('-')
             try:
-                pages.update(range(int(start), int(end)+1))
+                start, end = map(int, part.split('-'))
+                pages.update(range(start, end+1))
             except:
                 continue
         else:
@@ -79,7 +87,11 @@ def parse_page_selection(page_input, total_pages):
     return sorted([p for p in pages if 1 <= p <= total_pages])
 
 def extract_text_from_pages(pdf_bytes, pages_selected):
-    images = convert_from_bytes(pdf_bytes, dpi=PDF_DPI)
+    try:
+        images = convert_from_bytes(pdf_bytes, dpi=PDF_DPI)
+    except Exception as e:
+        st.error(f"Error converting PDF to images: {str(e)}")
+        return ""
     selected_images = [img for i, img in enumerate(images, start=1) if i in pages_selected]
     text = ""
     for img in selected_images:
@@ -98,7 +110,7 @@ def query_hf(prompt, context):
         if isinstance(result, list) and "generated_text" in result[0]:
             return result[0]["generated_text"]
         else:
-            return f"[HF Unexpected Response]: {result}"
+            return f"[Unexpected Hugging Face response]: {result}"
     except Exception as e:
         return f"[Error querying Hugging Face]: {str(e)}"
 
@@ -122,7 +134,8 @@ if choice == "📂 Upload PDFs":
                 pages_selected = parse_page_selection(page_input, total_pages)
             if pages_selected:
                 text = extract_text_from_pages(pdf_bytes, pages_selected)
-                st.text_area(f"Extracted text for {pdf.name} (pages {pages_selected})", text, height=300)
+                with st.expander(f"Extracted text for {pdf.name} (pages {pages_selected})"):
+                    st.write(text[:2000])  # show first 2000 chars
                 
                 question = st.text_input(f"Ask AI about {pdf.name} (pages {pages_selected}):")
                 if st.button(f"Ask AI about {pdf.name}"):
@@ -148,6 +161,8 @@ elif choice == "🔗 Google Drive Link":
             
             for f in files_to_process:
                 pdf_bytes = download_pdf_bytes(f['id'])
+                if not pdf_bytes:
+                    continue
                 total_pages = len(convert_from_bytes(pdf_bytes, dpi=PDF_DPI))
                 page_input = st.text_input(f"Pages to process for {f['name']} (e.g., 1,3-5, default all):", "all")
                 if page_input.strip().lower() == "all":
@@ -156,7 +171,8 @@ elif choice == "🔗 Google Drive Link":
                     pages_selected = parse_page_selection(page_input, total_pages)
                 if pages_selected:
                     text = extract_text_from_pages(pdf_bytes, pages_selected)
-                    st.text_area(f"Extracted text for {f['name']} (pages {pages_selected})", text, height=300)
+                    with st.expander(f"Extracted text for {f['name']} (pages {pages_selected})"):
+                        st.write(text[:2000])
                     
                     question = st.text_input(f"Ask AI about {f['name']} (pages {pages_selected}):")
                     if st.button(f"Ask AI about {f['name']}"):
