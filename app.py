@@ -69,22 +69,38 @@ def download_drive_file(file_id):
     return file_data.getvalue()
 
 # =========================
-# Extract File ID from Google Drive Link
+# Extract File or Folder ID
 # =========================
-def extract_drive_file_id(url):
+def extract_drive_id(url):
     """
-    Extract the file ID from a Google Drive URL.
+    Returns a tuple: (id, type) where type is 'file' or 'folder'
     Supports:
-    - https://drive.google.com/file/d/FILE_ID/view?usp=sharing
-    - https://drive.google.com/open?id=FILE_ID
+    - file links: /d/FILE_ID or open?id=FILE_ID
+    - folder links: /folders/FOLDER_ID
     """
+    # Check file /d/ or open?id=
     match = re.search(r"/d/([a-zA-Z0-9_-]+)", url)
     if match:
-        return match.group(1)
+        return match.group(1), "file"
     match = re.search(r"id=([a-zA-Z0-9_-]+)", url)
     if match:
-        return match.group(1)
-    return None
+        return match.group(1), "file"
+    # Check folder /folders/
+    match = re.search(r"/folders/([a-zA-Z0-9_-]+)", url)
+    if match:
+        return match.group(1), "folder"
+    return None, None
+
+# =========================
+# List PDFs in a Google Drive Folder
+# =========================
+def list_pdfs_in_folder(folder_id):
+    results = drive_service.files().list(
+        q=f"'{folder_id}' in parents and mimeType='application/pdf'",
+        fields="files(id, name)"
+    ).execute()
+    files = results.get('files', [])
+    return files
 
 # =========================
 # Streamlit UI
@@ -109,22 +125,36 @@ if choice == "📂 Upload PDFs":
             all_texts.append((pdf.name, text))
 
 # -------------------------
-# Google Drive Link
+# Google Drive Link or Folder
 # -------------------------
 elif choice == "🔗 Google Drive Link":
-    drive_link = st.text_input("Paste Google Drive file link:")
+    drive_link = st.text_input("Paste Google Drive file or folder link:")
     if drive_link:
-        file_id = extract_drive_file_id(drive_link)
-        if not file_id:
-            st.error("Invalid Google Drive link. Please use a proper share link.")
+        drive_id, link_type = extract_drive_id(drive_link)
+        if not drive_id:
+            st.error("Invalid Google Drive link. Please use a proper file or folder link.")
         else:
-            try:
-                with st.spinner("Downloading file from Google Drive..."):
-                    pdf_bytes = download_drive_file(file_id)
-                text = extract_text_from_pdf_bytes(pdf_bytes, "drive_file.pdf")
-                all_texts.append(("drive_file.pdf", text))
-            except Exception as e:
-                st.error(f"Google Drive Error: {str(e)}")
+            if link_type == "file":
+                try:
+                    with st.spinner("Downloading file from Google Drive..."):
+                        pdf_bytes = download_drive_file(drive_id)
+                    text = extract_text_from_pdf_bytes(pdf_bytes, "drive_file.pdf")
+                    all_texts.append(("drive_file.pdf", text))
+                except Exception as e:
+                    st.error(f"Google Drive Error: {str(e)}")
+            elif link_type == "folder":
+                try:
+                    with st.spinner("Listing PDFs in folder..."):
+                        files = list_pdfs_in_folder(drive_id)
+                    if not files:
+                        st.warning("No PDF files found in this folder.")
+                    for f in files:
+                        with st.spinner(f"Downloading {f['name']}..."):
+                            pdf_bytes = download_drive_file(f['id'])
+                            text = extract_text_from_pdf_bytes(pdf_bytes, f['name'])
+                            all_texts.append((f['name'], text))
+                except Exception as e:
+                    st.error(f"Google Drive Folder Error: {str(e)}")
 
 # -------------------------
 # Display Text and AI Chat
