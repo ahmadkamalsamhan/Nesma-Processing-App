@@ -31,19 +31,16 @@ HF_HEADERS = {"Authorization": f"Bearer {HF_API_TOKEN}"}
 # =========================
 # Settings
 # =========================
-MAX_PAGES_PER_PDF = 10
 PDF_DPI = 150
-MAX_CHARS_PER_FILE = 1000
+MAX_CHARS_PER_FILE = 1000  # for AI queries
 
 # =========================
 # OCR Extraction
 # =========================
-def extract_text_from_pdf_bytes(pdf_bytes, filename, page_range=None):
+def extract_text_from_pdf_bytes(pdf_bytes, pages=None):
     images = convert_from_bytes(pdf_bytes, dpi=PDF_DPI)
-    if page_range:
-        images = [img for i, img in enumerate(images, start=1) if i in page_range]
-    else:
-        images = images[:MAX_PAGES_PER_PDF]  # limit pages
+    if pages:
+        images = [img for i, img in enumerate(images, start=1) if i in pages]
     text = ""
     for img in images:
         text += pytesseract.image_to_string(img, lang="eng") + "\n"
@@ -67,12 +64,6 @@ def query_hf(prompt, context):
 # Extract File or Folder ID
 # =========================
 def extract_drive_id(url):
-    """
-    Returns a tuple: (id, type) where type is 'file' or 'folder'
-    Supports:
-    - file links: /d/FILE_ID or open?id=FILE_ID
-    - folder links: /folders/FOLDER_ID
-    """
     match = re.search(r"/d/([a-zA-Z0-9_-]+)", url)
     if match:
         return match.group(1), "file"
@@ -113,7 +104,7 @@ def download_pdf_bytes(file_id):
 st.title("📄 Nesma PDF OCR + AI Chat")
 
 choice = st.radio("Select input:", ["📂 Upload PDFs", "🔗 Google Drive Link"])
-all_texts = []
+all_texts = []  # store (file_name, text) for all PDFs
 
 # -------------------------
 # Upload PDFs
@@ -123,11 +114,19 @@ if choice == "📂 Upload PDFs":
         "Upload PDF files", type="pdf", accept_multiple_files=True
     )
     if uploaded_files:
-        for i, pdf in enumerate(uploaded_files, start=1):
+        for pdf in uploaded_files:
+            num_pages = None
             pdf_bytes = pdf.read()
-            with st.spinner(f"Processing {pdf.name} ({i}/{len(uploaded_files)})..."):
-                text = extract_text_from_pdf_bytes(pdf_bytes, pdf.name)
-            all_texts.append((pdf.name, text))
+            # Ask user which pages to process
+            total_pages = len(convert_from_bytes(pdf_bytes, dpi=PDF_DPI))
+            page_options = list(range(1, total_pages + 1))
+            pages_selected = st.multiselect(
+                f"Select pages for {pdf.name} (default all pages)", page_options, default=page_options
+            )
+            if pages_selected:
+                with st.spinner(f"Extracting text from {pdf.name}..."):
+                    text = extract_text_from_pdf_bytes(pdf_bytes, pages_selected)
+                all_texts.append((pdf.name, text))
 
 # -------------------------
 # Google Drive Link or Folder
@@ -139,27 +138,24 @@ elif choice == "🔗 Google Drive Link":
         if not drive_id:
             st.error("Invalid Google Drive link. Please use a proper file or folder link.")
         else:
+            files_to_process = []
             if link_type == "file":
-                try:
-                    with st.spinner("Processing file from Google Drive..."):
-                        pdf_bytes = download_pdf_bytes(drive_id)
-                        text = extract_text_from_pdf_bytes(pdf_bytes, "drive_file.pdf")
-                        all_texts.append(("drive_file.pdf", text))
-                except Exception as e:
-                    st.error(f"Google Drive Error: {str(e)}")
+                files_to_process = [{"id": drive_id, "name": "drive_file.pdf"}]
             elif link_type == "folder":
-                try:
-                    with st.spinner("Listing PDFs in folder..."):
-                        files = list_pdfs_in_folder(drive_id)
-                    if not files:
-                        st.warning("No PDF files found in this folder.")
-                    for idx, f in enumerate(files, start=1):
-                        with st.spinner(f"Processing {f['name']} ({idx}/{len(files)})..."):
-                            pdf_bytes = download_pdf_bytes(f['id'])
-                            text = extract_text_from_pdf_bytes(pdf_bytes, f['name'])
-                            all_texts.append((f['name'], text))
-                except Exception as e:
-                    st.error(f"Google Drive Folder Error: {str(e)}")
+                files_to_process = list_pdfs_in_folder(drive_id)
+                if not files_to_process:
+                    st.warning("No PDF files found in this folder.")
+            for f in files_to_process:
+                pdf_bytes = download_pdf_bytes(f['id'])
+                total_pages = len(convert_from_bytes(pdf_bytes, dpi=PDF_DPI))
+                page_options = list(range(1, total_pages + 1))
+                pages_selected = st.multiselect(
+                    f"Select pages for {f['name']} (default all pages)", page_options, default=page_options
+                )
+                if pages_selected:
+                    with st.spinner(f"Extracting text from {f['name']}..."):
+                        text = extract_text_from_pdf_bytes(pdf_bytes, pages_selected)
+                    all_texts.append((f['name'], text))
 
 # -------------------------
 # Display Text and AI Chat
@@ -171,7 +167,7 @@ if all_texts:
 
     question = st.text_input("💬 Ask AI about these PDFs:")
     if st.button("Ask AI") and question:
-        # Limit context per file to save tokens and memory
+        # Limit context per file
         context = "\n\n".join([t[1][:MAX_CHARS_PER_FILE] for t in all_texts])
         with st.spinner("Querying AI..."):
             answer = query_hf(question, context)
