@@ -35,6 +35,32 @@ PDF_DPI = 150
 MAX_CHARS_PER_FILE = 1000  # for AI queries
 
 # =========================
+# Helper: Parse page ranges
+# =========================
+def parse_page_selection(page_input, total_pages):
+    """
+    Convert a user string like "1,2,5-7" into a list of integers.
+    Ignores invalid numbers or numbers > total_pages.
+    """
+    pages = set()
+    parts = page_input.split(',')
+    for part in parts:
+        if '-' in part:
+            start, end = part.split('-')
+            try:
+                start = int(start)
+                end = int(end)
+                pages.update(range(start, end + 1))
+            except:
+                continue
+        else:
+            try:
+                pages.add(int(part))
+            except:
+                continue
+    return sorted([p for p in pages if 1 <= p <= total_pages])
+
+# =========================
 # OCR Extraction
 # =========================
 def extract_text_from_pdf_bytes(pdf_bytes, pages=None):
@@ -115,14 +141,15 @@ if choice == "📂 Upload PDFs":
     )
     if uploaded_files:
         for pdf in uploaded_files:
-            num_pages = None
             pdf_bytes = pdf.read()
-            # Ask user which pages to process
             total_pages = len(convert_from_bytes(pdf_bytes, dpi=PDF_DPI))
-            page_options = list(range(1, total_pages + 1))
-            pages_selected = st.multiselect(
-                f"Select pages for {pdf.name} (default all pages)", page_options, default=page_options
+            page_input = st.text_input(
+                f"Enter pages for {pdf.name} (e.g., 1,3-5, default all):", "all"
             )
+            if page_input.strip().lower() == "all":
+                pages_selected = list(range(1, total_pages + 1))
+            else:
+                pages_selected = parse_page_selection(page_input, total_pages)
             if pages_selected:
                 with st.spinner(f"Extracting text from {pdf.name}..."):
                     text = extract_text_from_pdf_bytes(pdf_bytes, pages_selected)
@@ -148,10 +175,13 @@ elif choice == "🔗 Google Drive Link":
             for f in files_to_process:
                 pdf_bytes = download_pdf_bytes(f['id'])
                 total_pages = len(convert_from_bytes(pdf_bytes, dpi=PDF_DPI))
-                page_options = list(range(1, total_pages + 1))
-                pages_selected = st.multiselect(
-                    f"Select pages for {f['name']} (default all pages)", page_options, default=page_options
+                page_input = st.text_input(
+                    f"Enter pages for {f['name']} (e.g., 1,3-5, default all):", "all"
                 )
+                if page_input.strip().lower() == "all":
+                    pages_selected = list(range(1, total_pages + 1))
+                else:
+                    pages_selected = parse_page_selection(page_input, total_pages)
                 if pages_selected:
                     with st.spinner(f"Extracting text from {f['name']}..."):
                         text = extract_text_from_pdf_bytes(pdf_bytes, pages_selected)
