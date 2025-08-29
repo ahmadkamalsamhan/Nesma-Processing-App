@@ -1,0 +1,11 @@
+streamlit
+pytesseract
+pdf2image
+Pillow
+sentence-transformers
+faiss-cpu
+google-auth
+google-auth-oauthlib
+google-api-python-client
+pandas
+openpyxl
