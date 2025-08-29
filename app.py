@@ -5,6 +5,7 @@ from pdf2image import convert_from_bytes
 from PIL import Image
 import io
 import requests
+import re
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -68,6 +69,24 @@ def download_drive_file(file_id):
     return file_data.getvalue()
 
 # =========================
+# Extract File ID from Google Drive Link
+# =========================
+def extract_drive_file_id(url):
+    """
+    Extract the file ID from a Google Drive URL.
+    Supports:
+    - https://drive.google.com/file/d/FILE_ID/view?usp=sharing
+    - https://drive.google.com/open?id=FILE_ID
+    """
+    match = re.search(r"/d/([a-zA-Z0-9_-]+)", url)
+    if match:
+        return match.group(1)
+    match = re.search(r"id=([a-zA-Z0-9_-]+)", url)
+    if match:
+        return match.group(1)
+    return None
+
+# =========================
 # Streamlit UI
 # =========================
 st.title("📄 Nesma PDF OCR + AI Chat")
@@ -95,14 +114,17 @@ if choice == "📂 Upload PDFs":
 elif choice == "🔗 Google Drive Link":
     drive_link = st.text_input("Paste Google Drive file link:")
     if drive_link:
-        try:
-            file_id = drive_link.split("/d/")[1].split("/")[0]
-            with st.spinner("Downloading file from Google Drive..."):
-                pdf_bytes = download_drive_file(file_id)
-            text = extract_text_from_pdf_bytes(pdf_bytes, "drive_file.pdf")
-            all_texts.append(("drive_file.pdf", text))
-        except Exception as e:
-            st.error(f"Google Drive Error: {str(e)}")
+        file_id = extract_drive_file_id(drive_link)
+        if not file_id:
+            st.error("Invalid Google Drive link. Please use a proper share link.")
+        else:
+            try:
+                with st.spinner("Downloading file from Google Drive..."):
+                    pdf_bytes = download_drive_file(file_id)
+                text = extract_text_from_pdf_bytes(pdf_bytes, "drive_file.pdf")
+                all_texts.append(("drive_file.pdf", text))
+            except Exception as e:
+                st.error(f"Google Drive Error: {str(e)}")
 
 # -------------------------
 # Display Text and AI Chat
