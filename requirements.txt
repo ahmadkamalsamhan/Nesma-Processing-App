@@ -1,11 +1,11 @@
 streamlit
 pytesseract
-pdf2image
 Pillow
+PyMuPDF
 sentence-transformers
 faiss-cpu
 google-auth
-google-auth-oauthlib
 google-api-python-client
 pandas
 openpyxl
+requests
