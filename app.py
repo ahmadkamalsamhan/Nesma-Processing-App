@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 from io import BytesIO
 import pytesseract
@@ -12,23 +11,25 @@ from googleapiclient.discovery import build
 import requests
 import traceback
 
+# ✅ Tell pytesseract where binary is (on Streamlit Cloud)
+pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
+
 st.set_page_config(page_title="Nesma PDF OCR + AI", layout="wide")
 st.title("📄 Nesma PDF OCR + AI Semantic Search System")
 
 # --------------------------
-# Load service account from Streamlit secrets
+# Load Google Drive credentials from secrets
 # --------------------------
 if "SERVICE_ACCOUNT_JSON" not in st.secrets:
     st.error("Missing SERVICE_ACCOUNT_JSON in Streamlit secrets. Please add it in Manage App → Secrets.")
     st.stop()
 
-# Secrets already parsed as dict when you use [SERVICE_ACCOUNT_JSON] in TOML
 service_account_info = dict(st.secrets["SERVICE_ACCOUNT_JSON"])
 
-# Fix private_key formatting if necessary
+# Fix private_key formatting
 if "private_key" in service_account_info:
     pk = service_account_info["private_key"]
-    if "\\n" in pk:  # escaped newlines
+    if "\\n" in pk:
         pk = pk.replace("\\n", "\n")
     if not pk.endswith("\n"):
         pk += "\n"
@@ -41,18 +42,18 @@ try:
         scopes=SCOPES
     )
     drive_service = build("drive", "v3", credentials=credentials)
-except Exception as e:
-    st.error("Failed to create Google Drive credentials. Check secrets formatting.")
+except Exception:
+    st.error("❌ Failed to create Google Drive credentials. Check secrets formatting.")
     st.text(traceback.format_exc())
     st.stop()
 
 # --------------------------
 # UI: PDF sources
 # --------------------------
-st.subheader("PDF Sources")
+st.subheader("📂 Provide PDF files")
 
-folder_id = st.text_input("Paste Google Drive folder ID (optional)")
-drive_link = st.text_input("Or paste a Google Drive file link (optional)")
+folder_id = st.text_input("Google Drive Folder ID (optional)")
+drive_link = st.text_input("Google Drive File Link (optional)")
 uploaded_files = st.file_uploader("Upload PDFs (optional)", type="pdf", accept_multiple_files=True)
 pages_input = st.text_input("Page range (e.g., 'all' or '1-5')", value="all")
 
@@ -70,7 +71,7 @@ def list_pdfs_in_folder(fid):
         ).execute()
         return results.get("files", [])
     except Exception:
-        st.error("Failed to list files in folder. Check folder permissions.")
+        st.error("Failed to list files in folder. Check permissions.")
         st.text(traceback.format_exc())
         return []
 
@@ -85,11 +86,7 @@ def download_pdf(fid):
 
 def extract_file_id_from_link(link):
     import re
-    patterns = [
-        r"/d/([a-zA-Z0-9_-]+)",
-        r"id=([a-zA-Z0-9_-]+)",
-        r"folders/([a-zA-Z0-9_-]+)"
-    ]
+    patterns = [r"/d/([a-zA-Z0-9_-]+)", r"id=([a-zA-Z0-9_-]+)", r"folders/([a-zA-Z0-9_-]+)"]
     for p in patterns:
         m = re.search(p, link)
         if m:
@@ -100,7 +97,7 @@ def extract_text_from_pdf_bytes(file_bytes, filename, page_range="all", chunk_si
     try:
         doc = fitz.open(stream=file_bytes, filetype="pdf")
     except Exception:
-        st.error(f"Cannot open PDF {filename}.")
+        st.error(f"❌ Cannot open PDF {filename}.")
         return "", [], []
     if page_range.lower() != "all":
         try:
@@ -115,7 +112,7 @@ def extract_text_from_pdf_bytes(file_bytes, filename, page_range="all", chunk_si
     chunks, metadata = [], []
     for i in pages:
         page = doc[i]
-        pix = page.get_pixmap(dpi=300)
+        pix = page.get_pixmap(dpi=200)
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
         try:
             text = pytesseract.image_to_string(img, lang="ara+eng")
@@ -132,7 +129,7 @@ def extract_text_from_pdf_bytes(file_bytes, filename, page_range="all", chunk_si
 # --------------------------
 # Process PDFs
 # --------------------------
-if st.button("Start processing"):
+if st.button("🚀 Start processing"):
     chunks, metadata = [], []
     entries = []
 
@@ -147,7 +144,7 @@ if st.button("Start processing"):
             entries.append({"upload_obj": f, "name": f.name})
 
     if not entries:
-        st.warning("No PDFs provided.")
+        st.warning("⚠️ No PDFs provided.")
     else:
         progress = st.progress(0)
         for idx, e in enumerate(entries):
@@ -165,7 +162,7 @@ if st.button("Start processing"):
             progress.progress((idx+1)/len(entries))
 
         if chunks:
-            st.success(f"Extracted {len(chunks)} chunks.")
+            st.success(f"✅ Extracted {len(chunks)} chunks of text.")
             model = SentenceTransformer("all-MiniLM-L6-v2")
             embeddings = model.encode(chunks, show_progress_bar=False)
             index = faiss.IndexFlatL2(embeddings.shape[1])
@@ -183,8 +180,8 @@ if st.button("Start processing"):
 # Query interface
 # --------------------------
 if "index" in st.session_state:
-    st.subheader("Ask a question")
-    q = st.text_input("Your query")
+    st.subheader("🔎 Ask a Question (Semantic Search)")
+    q = st.text_input("Your query here")
     if q:
         model = st.session_state["model"]
         index = st.session_state["index"]
@@ -193,11 +190,11 @@ if "index" in st.session_state:
         for i in I[0]:
             fname, pnum = st.session_state["metadata"][i]
             snippet = st.session_state["chunks"][i]
-            st.markdown(f"**{fname} (Page {pnum})**")
+            st.markdown(f"**📑 {fname} (Page {pnum})**")
             st.write(snippet)
             st.markdown("---")
 
-    if st.button("Export to Excel"):
+    if st.button("📥 Export to Excel"):
         df = pd.DataFrame({
             "File": [m[0] for m in st.session_state["metadata"]],
             "Page": [m[1] for m in st.session_state["metadata"]],
